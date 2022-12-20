@@ -22,7 +22,7 @@ parking_lot = "0.12.1"
 
 [dependencies.serenity]
 default-features = false
-features = ["builder", "client", "gateway", "model", "utils", "collector"]
+features = ["builder", "client", "gateway", "model", "utils", "collector", "unstable_discord_api"]
 
 # version = "0.11.5"
 

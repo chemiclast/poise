@@ -15,7 +15,16 @@ async fn user_permissions(
         None => return Some(serenity::Permissions::all()), // no permission checks in DMs
     };
 
-    let guild = guild_id.to_partial_guild(ctx).await.ok()?;
+    #[cfg(feature = "cache")]
+    let guild = match ctx.cache.guild(guild_id) {
+        Some(x) => x.clone(),
+        None => return None, // Guild not in cache
+    };
+    #[cfg(not(feature = "cache"))]
+    let guild = match ctx.http.get_guild(guild_id).await {
+        Ok(x) => x,
+        Err(_) => return None,
+    };
 
     // Use to_channel so that it can fallback on HTTP for threads (which aren't in cache usually)
     let channel = match channel_id.to_channel(ctx).await {
@@ -29,9 +38,21 @@ async fn user_permissions(
         Err(_) => return None,
     };
 
-    let member = guild.member(ctx, user_id).await.ok()?;
+    #[cfg(feature = "cache")]
+    let cached_member = guild.members.get(&user_id).cloned();
+    #[cfg(not(feature = "cache"))]
+    let cached_member = None;
 
-    guild.user_permissions_in(&channel, &member).ok()
+    // If member not in cache (probably because presences intent is not enabled), retrieve via HTTP
+    let member = match cached_member {
+        Some(x) => x,
+        None => match ctx.http.get_member(guild_id, user_id).await {
+            Ok(member) => member,
+            Err(_) => return None,
+        },
+    };
+
+    Some(guild.user_permissions_in(&channel, &member))
 }
 
 /// Retrieves the set of permissions that are lacking, relative to the given required permission set
@@ -79,7 +100,7 @@ async fn check_permissions_and_cooldown_single<'a, U, E>(
             Some(guild_id) => {
                 #[cfg(feature = "cache")]
                 if ctx.framework().options().require_cache_for_guild_check
-                    && ctx.cache().guild_field(guild_id, |_| ()).is_none()
+                    && ctx.discord().cache.guild(guild_id).is_none()
                 {
                     return Err(crate::FrameworkError::GuildOnly { ctx });
                 }

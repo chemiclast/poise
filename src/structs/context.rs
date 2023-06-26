@@ -112,19 +112,12 @@ context_methods! {
                 ctx.defer_response(false).await?;
                 None
             }
-            Self::Prefix(ctx) => Some(
-                ctx.msg
-                    .channel_id
-                    .start_typing(&ctx.serenity_context.http)?,
-            ),
+            Self::Prefix(ctx) => Some(ctx.msg.channel_id.start_typing(&ctx.discord.http)),
         })
     }
 
     /// Shorthand of [`crate::say_reply`]
-    ///
-    /// Note: panics when called in an autocomplete context!
-    await (say self text)
-    (pub async fn say(
+    pub async fn say(
         self,
         text: impl Into<String>,
     ) -> Result<crate::ReplyHandle<'a>, serenity::Error>) {
@@ -132,15 +125,10 @@ context_methods! {
     }
 
     /// Shorthand of [`crate::send_reply`]
-    ///
-    /// Note: panics when called in an autocomplete context!
-    await (send self builder)
-    (pub async fn send<'att>(
+    pub async fn send<'att>(
         self,
-        builder: impl for<'b> FnOnce(
-            &'b mut crate::CreateReply<'att>,
-        ) -> &'b mut crate::CreateReply<'att>,
-    ) -> Result<crate::ReplyHandle<'a>, serenity::Error>) {
+        builder: crate::CreateReply,
+    ) -> Result<crate::ReplyHandle<'a>, serenity::Error> {
         crate::send_reply(self, builder).await
     }
 
@@ -199,12 +187,9 @@ context_methods! {
 
     // Doesn't fit in with the rest of the functions here but it's convenient
     /// Return the guild of this context, if we are inside a guild.
-    ///
-    /// Warning: clones the entire Guild instance out of the cache
     #[cfg(feature = "cache")]
-    (guild self)
-    (pub fn guild(self) -> Option<serenity::Guild>) {
-        self.guild_id()?.to_guild_cached(self)
+    pub fn guild(&self) -> Option<serenity::GuildRef<'_>> {
+        self.guild_id()?.to_guild_cached(self.discord())
     }
 
     // Doesn't fit in with the rest of the functions here but it's convenient
@@ -217,8 +202,8 @@ context_methods! {
     await (partial_guild self)
     (pub async fn partial_guild(self) -> Option<serenity::PartialGuild>) {
         #[cfg(feature = "cache")]
-        if let Some(guild) = self.guild_id()?.to_guild_cached(self) {
-            return Some(guild.into());
+        if let Some(guild) = self.guild_id()?.to_guild_cached(self.discord()) {
+            return Some(guild.clone().into());
         }
 
         self.guild_id()?.to_partial_guild(self).await.ok()
@@ -266,13 +251,11 @@ context_methods! {
     }
 
     /// Return a ID that uniquely identifies this command invocation.
-    #[cfg(any(feature = "chrono", feature = "time"))]
-    (id self)
-    (pub fn id(self) -> u64) {
+    pub fn id(&self) -> u64 {
         match self {
-            Self::Application(ctx) => ctx.interaction.id().0,
+            Self::Application(ctx) => ctx.interaction.id().get(),
             Self::Prefix(ctx) => {
-                let mut id = ctx.msg.id.0;
+                let mut id = ctx.msg.id.get();
                 if let Some(edited_timestamp) = ctx.msg.edited_timestamp {
                     // We replace the 42 datetime bits with msg.timestamp_edited so that the ID is
                     // unique even after edits
@@ -283,10 +266,10 @@ context_methods! {
                     // Calculate Discord's datetime representation (millis since Discord epoch) and
                     // insert those bits into the ID
 
-                    #[cfg(feature = "time")]
+                    #[cfg(not(feature = "chrono"))]
                     let timestamp_millis = edited_timestamp.unix_timestamp_nanos() / 1_000_000;
 
-                    #[cfg(not(feature = "time"))]
+                    #[cfg(feature = "chrono")]
                     let timestamp_millis = edited_timestamp.timestamp_millis();
 
                     id |= ((timestamp_millis - 1420070400000) as u64) << 22;
@@ -477,12 +460,8 @@ impl<'a, U, E> Context<'a, U, E> {
             Self::Application(ctx) => {
                 // Skip autocomplete interactions
                 let interaction = match ctx.interaction {
-                    crate::ApplicationCommandOrAutocompleteInteraction::ApplicationCommand(
-                        interaction,
-                    ) => interaction,
-                    crate::ApplicationCommandOrAutocompleteInteraction::Autocomplete(_) => {
-                        return Ok(())
-                    }
+                    crate::CommandOrAutocompleteInteraction::Command(interaction) => interaction,
+                    crate::CommandOrAutocompleteInteraction::Autocomplete(_) => return Ok(()),
                 };
 
                 // Check slash command
@@ -496,7 +475,7 @@ impl<'a, U, E> Context<'a, U, E> {
 
                 // Check context menu command
                 if let (Some(action), Some(target)) =
-                    (ctx.command.context_menu_action, &interaction.data.target())
+                    (ctx.command.context_menu_action, interaction.data.target())
                 {
                     return match action {
                         crate::ContextMenuCommandAction::User(action) => {
@@ -508,7 +487,7 @@ impl<'a, U, E> Context<'a, U, E> {
                         }
                         crate::ContextMenuCommandAction::Message(action) => {
                             if let serenity::ResolvedTarget::Message(message) = target {
-                                action(ctx, *message.clone()).await
+                                action(ctx, message.clone()).await
                             } else {
                                 Ok(())
                             }
@@ -527,6 +506,95 @@ impl<'a, U, E> Context<'a, U, E> {
         // (This should never happen, because if this context cannot be executed, how could this
         // method have been called)
         Ok(())
+    }
+
+    /// Re-runs this entire command invocation
+    ///
+    /// Permission checks are omitted; the command code is directly executed as a function. The
+    /// result is returned by this function
+    pub async fn rerun(self) -> Result<(), E> {
+        match self.rerun_inner().await {
+            Ok(()) => Ok(()),
+            Err(crate::FrameworkError::Command { error, ctx: _ }) => Err(error),
+            // The only code that runs before the actual user code (which would trigger Command
+            // error) is argument parsing. And that's pretty much deterministic. So, because the
+            // current command invocation parsed successfully, we can always expect that a command
+            // rerun will still parse successfully.
+            // Also: can't debug print error because then we need U: Debug + E: Debug bound arghhhhh
+            Err(_other) => panic!("unexpected error before entering command"),
+        }
+    }
+
+    /// Returns the string with which this command was invoked.
+    ///
+    /// For example `"/slash_command subcommand arg1:value1 arg2:value2"`.
+    pub fn invocation_string(&self) -> String {
+        match self {
+            Context::Application(ctx) => {
+                let mut string = String::from("/");
+                for parent_command in ctx.parent_commands {
+                    string += &parent_command.name;
+                    string += " ";
+                }
+                string += &ctx.command.name;
+                for arg in ctx.args {
+                    #[allow(unused_imports)] // required for simd-json
+                    use ::serenity::json::prelude::*;
+                    use std::fmt::Write as _;
+
+                    string += " ";
+                    string += arg.name;
+                    string += ":";
+                    let _ = match arg.value {
+                        // This was verified to match Discord behavior when copy-pasting a not-yet
+                        // sent slash command invocation
+                        serenity::ResolvedValue::Attachment(_) => write!(string, ""),
+                        serenity::ResolvedValue::Boolean(x) => write!(string, "{}", x),
+                        serenity::ResolvedValue::Integer(x) => write!(string, "{}", x),
+                        serenity::ResolvedValue::Number(x) => write!(string, "{}", x),
+                        serenity::ResolvedValue::String(x) => write!(string, "{}", x),
+                        serenity::ResolvedValue::Channel(x) => {
+                            write!(string, "#{}", x.name.as_deref().unwrap_or(""))
+                        }
+                        serenity::ResolvedValue::Role(x) => write!(string, "@{}", x.name),
+                        serenity::ResolvedValue::User(x, _) => {
+                            string.push('@');
+                            string.push_str(&x.name);
+                            if let Some(discrim) = x.discriminator {
+                                let _ = write!(string, "#{discrim:04}");
+                            }
+                            Ok(())
+                        }
+
+                        serenity::ResolvedValue::Unresolved(_)
+                        | serenity::ResolvedValue::SubCommand(_)
+                        | serenity::ResolvedValue::SubCommandGroup(_)
+                        | serenity::ResolvedValue::Autocomplete { .. } => {
+                            log::warn!("unexpected interaction option type");
+                            Ok(())
+                        }
+                        // We need this because ResolvedValue is #[non_exhaustive]
+                        _ => {
+                            log::warn!("newly-added unknown interaction option type");
+                            Ok(())
+                        }
+                    };
+                    // if let Some(x) = arg.value.as_bool() {
+                    //     let _ = write!(string, "{}", x);
+                    // } else if let Some(x) = arg.value.as_i64() {
+                    //     let _ = write!(string, "{}", x);
+                    // } else if let Some(x) = arg.value.as_u64() {
+                    //     let _ = write!(string, "{}", x);
+                    // } else if let Some(x) = arg.value.as_f64() {
+                    //     let _ = write!(string, "{}", x);
+                    // } else if let Some(x) = arg.value.as_str() {
+                    //     let _ = write!(string, "{}", x);
+                    // }
+                }
+                string
+            }
+            Context::Prefix(ctx) => ctx.msg.content.clone(),
+        }
     }
 
     /// Returns the raw type erased invocation data
@@ -565,6 +633,11 @@ impl<U: Sync, E> serenity::CacheHttp for Context<'_, U, E> {
     fn cache(&self) -> Option<&std::sync::Arc<serenity::Cache>> {
         Some(&self.serenity_context().cache)
     }
+
+    /// Creates a [`serenity::CacheHttp`] from the serenity Context
+    pub fn cache_and_http(&self) -> impl serenity::CacheHttp + 'a {
+        self.discord()
+    }
 }
 
 /// Trimmed down, more general version of [`Context`]
@@ -601,5 +674,32 @@ impl<'a, U, E> From<Context<'a, U, E>> for PartialContext<'a, U, E> {
             framework: ctx.framework(),
             data: ctx.data(),
         }
+    }
+}
+
+impl<'a, U, E> AsRef<serenity::Http> for Context<'a, U, E> {
+    fn as_ref(&self) -> &serenity::Http {
+        &self.discord().http
+    }
+}
+
+#[cfg(feature = "cache")]
+impl<'a, U, E> AsRef<serenity::Cache> for Context<'a, U, E> {
+    fn as_ref(&self) -> &serenity::Cache {
+        &self.discord().cache
+    }
+}
+
+impl<'a, U, E> serenity::CacheHttp for Context<'a, U, E>
+where
+    U: Sync,
+{
+    fn http(&self) -> &serenity::Http {
+        &self.discord().http
+    }
+
+    #[cfg(feature = "cache")]
+    fn cache(&self) -> Option<&std::sync::Arc<serenity::Cache>> {
+        Some(&self.discord().cache)
     }
 }

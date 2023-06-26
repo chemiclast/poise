@@ -8,19 +8,20 @@ use crate::{serenity_prelude as serenity, BoxFuture};
 /// [`crate::ApplicationContext`] because command checks are invoked for autocomplete interactions
 /// too: we don't want poise accidentally leaking sensitive information through autocomplete
 /// suggestions
+// TODO: inline this struct once merged into main branch
 #[derive(Copy, Clone, Debug)]
-pub enum ApplicationCommandOrAutocompleteInteraction<'a> {
+pub enum CommandOrAutocompleteInteraction<'a> {
     /// An application command interaction
-    ApplicationCommand(&'a serenity::ApplicationCommandInteraction),
+    Command(&'a serenity::CommandInteraction),
     /// An autocomplete interaction
-    Autocomplete(&'a serenity::AutocompleteInteraction),
+    Autocomplete(&'a serenity::CommandInteraction),
 }
 
-impl<'a> ApplicationCommandOrAutocompleteInteraction<'a> {
+impl<'a> CommandOrAutocompleteInteraction<'a> {
     /// Returns the data field of the underlying interaction
     pub fn data(self) -> &'a serenity::CommandData {
         match self {
-            Self::ApplicationCommand(x) => &x.data,
+            Self::Command(x) => &x.data,
             Self::Autocomplete(x) => &x.data,
         }
     }
@@ -28,7 +29,7 @@ impl<'a> ApplicationCommandOrAutocompleteInteraction<'a> {
     /// Returns the ID of the underlying interaction
     pub fn id(self) -> serenity::InteractionId {
         match self {
-            Self::ApplicationCommand(x) => x.id,
+            Self::Command(x) => x.id,
             Self::Autocomplete(x) => x.id,
         }
     }
@@ -36,7 +37,7 @@ impl<'a> ApplicationCommandOrAutocompleteInteraction<'a> {
     /// Returns the guild ID of the underlying interaction
     pub fn guild_id(self) -> Option<serenity::GuildId> {
         match self {
-            Self::ApplicationCommand(x) => x.guild_id,
+            Self::Command(x) => x.guild_id,
             Self::Autocomplete(x) => x.guild_id,
         }
     }
@@ -44,7 +45,7 @@ impl<'a> ApplicationCommandOrAutocompleteInteraction<'a> {
     /// Returns the channel ID of the underlying interaction
     pub fn channel_id(self) -> serenity::ChannelId {
         match self {
-            Self::ApplicationCommand(x) => x.channel_id,
+            Self::Command(x) => x.channel_id,
             Self::Autocomplete(x) => x.channel_id,
         }
     }
@@ -52,25 +53,25 @@ impl<'a> ApplicationCommandOrAutocompleteInteraction<'a> {
     /// Returns the member field of the underlying interaction
     pub fn member(self) -> Option<&'a serenity::Member> {
         match self {
-            Self::ApplicationCommand(x) => x.member.as_ref(),
-            Self::Autocomplete(x) => x.member.as_ref(),
+            Self::Command(x) => x.member.as_deref(),
+            Self::Autocomplete(x) => x.member.as_deref(),
         }
     }
 
     /// Returns the user field of the underlying interaction
     pub fn user(self) -> &'a serenity::User {
         match self {
-            Self::ApplicationCommand(x) => &x.user,
+            Self::Command(x) => &x.user,
             Self::Autocomplete(x) => &x.user,
         }
     }
 
-    /// Returns the inner [`serenity::ApplicationCommandInteraction`] and panics otherwise
-    pub fn unwrap(self) -> &'a serenity::ApplicationCommandInteraction {
+    /// Returns the inner [`serenity::CommandInteraction`] and panics otherwise
+    pub fn unwrap(self) -> &'a serenity::CommandInteraction {
         match self {
-            ApplicationCommandOrAutocompleteInteraction::ApplicationCommand(x) => x,
-            ApplicationCommandOrAutocompleteInteraction::Autocomplete(_) => {
-                panic!("expected application command interaction, got autocomplete interaction")
+            CommandOrAutocompleteInteraction::Command(x) => x,
+            CommandOrAutocompleteInteraction::Autocomplete(_) => {
+                panic!("expected command interaction, got autocomplete interaction")
             }
         }
     }
@@ -78,8 +79,8 @@ impl<'a> ApplicationCommandOrAutocompleteInteraction<'a> {
     /// Returns the locale field of the underlying interaction
     pub fn locale(self) -> &'a str {
         match self {
-            ApplicationCommandOrAutocompleteInteraction::ApplicationCommand(x) => &x.locale,
-            ApplicationCommandOrAutocompleteInteraction::Autocomplete(x) => &x.locale,
+            CommandOrAutocompleteInteraction::Command(x) => &x.locale,
+            CommandOrAutocompleteInteraction::Autocomplete(x) => &x.locale,
         }
     }
 }
@@ -92,13 +93,13 @@ pub struct ApplicationContext<'a, U, E> {
     #[derivative(Debug = "ignore")]
     pub serenity_context: &'a serenity::Context,
     /// The interaction which triggered this command execution.
-    pub interaction: ApplicationCommandOrAutocompleteInteraction<'a>,
+    pub interaction: CommandOrAutocompleteInteraction<'a>,
     /// Slash command arguments
     ///
     /// **Not** equivalent to `self.interaction.data().options`. That one refers to just the
     /// top-level command arguments, whereas [`Self::args`] is the options of the actual
     /// subcommand, if any.
-    pub args: &'a [serenity::CommandDataOption],
+    pub args: &'a [serenity::ResolvedOption<'a>],
     /// Keeps track of whether an initial response has been sent.
     ///
     /// Discord requires different HTTP endpoints for initial and additional responses.
@@ -137,8 +138,8 @@ impl<U, E> ApplicationContext<'_, U, E> {
     /// See [`crate::Context::defer()`]
     pub async fn defer_response(&self, ephemeral: bool) -> Result<(), serenity::Error> {
         let interaction = match self.interaction {
-            ApplicationCommandOrAutocompleteInteraction::ApplicationCommand(x) => x,
-            ApplicationCommandOrAutocompleteInteraction::Autocomplete(_) => return Ok(()),
+            CommandOrAutocompleteInteraction::Command(x) => x,
+            CommandOrAutocompleteInteraction::Autocomplete(_) => return Ok(()),
         };
 
         if !self
@@ -146,11 +147,14 @@ impl<U, E> ApplicationContext<'_, U, E> {
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             interaction
-                .create_interaction_response(self.serenity_context, |f| {
-                    f.kind(serenity::InteractionResponseType::DeferredChannelMessageWithSource)
-                        .interaction_response_data(|b| b.ephemeral(ephemeral))
-                })
+                .create_response(
+                    self.discord,
+                    serenity::CreateInteractionResponse::Defer(
+                        serenity::CreateInteractionResponseMessage::default().ephemeral(ephemeral),
+                    ),
+                )
                 .await?;
+
             self.has_sent_initial_response
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
@@ -220,12 +224,12 @@ pub struct CommandParameter<U, E> {
     /// For example a u32 [`CommandParameter`] would store this as the [`Self::type_setter`]:
     /// ```rust
     /// # use poise::serenity_prelude as serenity;
-    /// # let _: fn(&mut serenity::CreateApplicationCommandOption) -> &mut serenity::CreateApplicationCommandOption =
-    /// |b| b.kind(serenity::CommandOptionType::Integer).min_int_value(0).max_int_value(u32::MAX)
+    /// # let _: fn(serenity::CreateCommandOption) -> serenity::CreateCommandOption =
+    /// |b| b.kind(serenity::CommandOptionType::Integer).min_int_value(0).max_int_value(u64::MAX)
     /// # ;
     /// ```
     #[derivative(Debug = "ignore")]
-    pub type_setter: Option<fn(&mut serenity::CreateApplicationCommandOption)>,
+    pub type_setter: Option<fn(serenity::CreateCommandOption) -> serenity::CreateCommandOption>,
     /// Optionally, a callback that is invoked on autocomplete interactions. This closure should
     /// extract the partial argument from the given JSON value and generate the autocomplete
     /// response which contains the list of autocomplete suggestions.
@@ -244,32 +248,31 @@ pub struct CommandParameter<U, E> {
 impl<U, E> CommandParameter<U, E> {
     /// Generates a slash command parameter builder from this [`CommandParameter`] instance. This
     /// can be used to register the command on Discord's servers
-    pub fn create_as_slash_command_option(
-        &self,
-    ) -> Option<serenity::CreateApplicationCommandOption> {
-        let mut builder = serenity::CreateApplicationCommandOption::default();
-        builder
+    pub fn create_as_slash_command_option(&self) -> Option<serenity::CreateCommandOption> {
+        let mut b = serenity::CreateCommandOption::new(
+            serenity::CommandOptionType::Unknown(0), // Will be overwritten by type_setter below
+            &self.name,
+            self.description
+                .as_deref()
+                .unwrap_or("A slash command parameter"),
+        );
+
+        b = b
             .required(self.required)
-            .name(&self.name)
-            .description(
-                self.description
-                    .as_deref()
-                    .unwrap_or("A slash command parameter"),
-            )
             .set_autocomplete(self.autocomplete_callback.is_some());
         for (locale, name) in &self.name_localizations {
-            builder.name_localized(locale, name);
+            b = b.name_localized(locale, name);
         }
         for (locale, description) in &self.description_localizations {
-            builder.description_localized(locale, description);
+            b = b.description_localized(locale, description);
         }
         if let Some(channel_types) = &self.channel_types {
-            builder.channel_types(channel_types);
+            b = b.channel_types(channel_types.clone());
         }
         for (i, choice) in self.choices.iter().enumerate() {
-            builder.add_int_choice_localized(&choice.name, i as _, choice.localizations.iter());
+            b = b.add_int_choice_localized(&choice.name, i as _, choice.localizations.iter());
         }
-        (self.type_setter?)(&mut builder);
-        Some(builder)
+        b = (self.type_setter?)(b);
+        Some(b)
     }
 }

@@ -71,37 +71,29 @@ async fn main() {
                 Ok(true)
             })
         }),
-        /// Enforce command checks even for owners (enforced by default)
-        /// Set to true to bypass checks, which is useful for testing
-        skip_checks_for_owners: false,
-        event_handler: |_ctx, event, _framework, _data| {
+        listener: |event, _framework, _data| {
             Box::pin(async move {
-                println!("Got an event in event handler: {:?}", event.name());
+                println!("Got an event in listener: {:?}", event.snake_case_name());
                 Ok(())
             })
         },
         ..Default::default()
     };
-
-    poise::Framework::builder()
-        .token(
-            var("DISCORD_TOKEN")
-                .expect("Missing `DISCORD_TOKEN` env var, see README for more information."),
-        )
-        .setup(move |ctx, _ready, framework| {
-            Box::pin(async move {
-                println!("Logged in as {}", _ready.user.name);
-                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data {
-                    votes: Mutex::new(HashMap::new()),
-                })
+    let framework = poise::Framework::new(options, move |_ctx, _ready, _framework| {
+        Box::pin(async move {
+            Ok(Data {
+                votes: Mutex::new(HashMap::new()),
             })
         })
-        .options(options)
-        .intents(
-            serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT,
-        )
-        .run()
+    });
+
+    let token = var("DISCORD_TOKEN")
+        .expect("Missing `DISCORD_TOKEN` env var, see README for more information.");
+    let intents =
+        serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
+    let mut client = serenity::Client::builder(token, intents)
+        .framework(framework)
         .await
         .unwrap();
+    client.start().await.unwrap();
 }

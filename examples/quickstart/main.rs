@@ -18,19 +18,18 @@ async fn age(
 
 #[tokio::main]
 async fn main() {
-    let framework = poise::Framework::builder()
-        .options(poise::FrameworkOptions {
-            commands: vec![age()],
+    let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN");
+    let intents = serenity::GatewayIntents::non_privileged();
+    let framework = poise::Framework::new(
+        poise::FrameworkOptions {
+            commands: vec![age(), register()],
             ..Default::default()
-        })
-        .token(std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN"))
-        .intents(serenity::GatewayIntents::non_privileged())
-        .setup(|ctx, _ready, framework| {
-            Box::pin(async move {
-                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data {})
-            })
-        });
-
-    framework.run().await.unwrap();
+        },
+        move |_ctx, _ready, _framework| Box::pin(async move { Ok(Data {}) }),
+    );
+    let mut client = serenity::Client::builder(token, intents)
+        .framework(framework)
+        .await
+        .unwrap();
+    client.start().await.unwrap();
 }

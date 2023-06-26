@@ -21,7 +21,7 @@ enum ReplyHandleInner<'a> {
         http: &'a serenity::Http,
         /// Interaction which contains the necessary data to request the interaction response
         /// message object
-        interaction: &'a serenity::ApplicationCommandInteraction,
+        interaction: &'a serenity::CommandInteraction,
         /// If this is a followup response, the Message object (which Discord only returns for
         /// followup responses, not initial)
         followup: Option<Box<serenity::Message>>,
@@ -59,7 +59,7 @@ impl ReplyHandle<'_> {
                 http,
                 interaction,
                 followup: None,
-            } => interaction.get_interaction_response(http).await,
+            } => interaction.get_response(http).await,
             Autocomplete => panic!("reply is a no-op in autocomplete context"),
         }
     }
@@ -84,9 +84,7 @@ impl ReplyHandle<'_> {
                 http,
                 interaction,
                 followup: None,
-            } => Ok(Cow::Owned(
-                interaction.get_interaction_response(http).await?,
-            )),
+            } => Ok(Cow::Owned(interaction.get_response(http).await?)),
             Autocomplete => panic!("reply is a no-op in autocomplete context"),
         }
     }
@@ -95,27 +93,17 @@ impl ReplyHandle<'_> {
     // TODO: return the edited Message object?
     // TODO: should I eliminate the ctx parameter by storing it in self instead? Would infect
     //  ReplyHandle with <U, E> type parameters
-    pub async fn edit<'att, U, E>(
+    pub async fn edit<U, E>(
         &self,
         ctx: crate::Context<'_, U, E>,
-        builder: impl for<'a> FnOnce(&'a mut CreateReply<'att>) -> &'a mut CreateReply<'att>,
+        reply: CreateReply,
     ) -> Result<(), serenity::Error> {
-        let reply = ctx.reply_builder(builder);
+        let reply = reply.complete_from_ctx(ctx);
 
         match &self.0 {
             ReplyHandleInner::Prefix(msg) => {
                 msg.clone()
-                    .edit(ctx.serenity_context(), |b| {
-                        // Clear builder so that adding embeds or attachments won't add on top of
-                        // the pre-edit items but replace them (which is apparently the more
-                        // intuitive behavior). Notably, setting the builder to default doesn't
-                        // mean the entire message is reset to empty: Discord only updates parts
-                        // of the message that have had a modification specified
-                        *b = Default::default();
-
-                        reply.to_prefix_edit(b);
-                        b
-                    })
+                    .edit(ctx.discord(), reply.to_prefix_edit())
                     .await?;
             }
             ReplyHandleInner::Application {
@@ -124,10 +112,7 @@ impl ReplyHandle<'_> {
                 followup: None,
             } => {
                 interaction
-                    .edit_original_interaction_response(http, |b| {
-                        reply.to_slash_initial_response_edit(b);
-                        b
-                    })
+                    .edit_response(http, reply.to_slash_initial_response_edit())
                     .await?;
             }
             ReplyHandleInner::Application {
@@ -136,10 +121,7 @@ impl ReplyHandle<'_> {
                 followup: Some(msg),
             } => {
                 interaction
-                    .edit_followup_message(http, msg.id, |b| {
-                        reply.to_slash_followup_response(b);
-                        b
-                    })
+                    .edit_followup(http, msg.id, reply.to_slash_followup_response())
                     .await?;
             }
             ReplyHandleInner::Autocomplete => panic!("reply is a no-op in autocomplete context"),
@@ -158,13 +140,11 @@ impl ReplyHandle<'_> {
             } => match followup {
                 Some(followup) => {
                     interaction
-                        .delete_followup_message(ctx, followup.id)
+                        .delete_followup(ctx.discord(), followup.id)
                         .await?;
                 }
                 None => {
-                    interaction
-                        .delete_original_interaction_response(ctx)
-                        .await?;
+                    interaction.delete_response(ctx.discord()).await?;
                 }
             },
             ReplyHandleInner::Autocomplete => panic!("delete is a no-op in autocomplete context"),

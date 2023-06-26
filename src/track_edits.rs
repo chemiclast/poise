@@ -3,61 +3,6 @@
 
 use crate::serenity_prelude as serenity;
 
-/// Updates the given message according to the update event
-fn update_message(message: &mut serenity::Message, update: serenity::MessageUpdateEvent) {
-    message.id = update.id;
-    message.channel_id = update.channel_id;
-    message.guild_id = update.guild_id;
-
-    if let Some(kind) = update.kind {
-        message.kind = kind;
-    }
-    if let Some(content) = update.content {
-        message.content = content;
-    }
-    if let Some(tts) = update.tts {
-        message.tts = tts;
-    }
-    if let Some(pinned) = update.pinned {
-        message.pinned = pinned;
-    }
-    if let Some(timestamp) = update.timestamp {
-        message.timestamp = timestamp;
-    }
-    if let Some(edited_timestamp) = update.edited_timestamp {
-        message.edited_timestamp = Some(edited_timestamp);
-    }
-    if let Some(author) = update.author {
-        message.author = author;
-    }
-    if let Some(mention_everyone) = update.mention_everyone {
-        message.mention_everyone = mention_everyone;
-    }
-    if let Some(mentions) = update.mentions {
-        message.mentions = mentions;
-    }
-    if let Some(mention_roles) = update.mention_roles {
-        message.mention_roles = mention_roles;
-    }
-    if let Some(attachments) = update.attachments {
-        message.attachments = attachments;
-    }
-    // if let Some(embeds) = update.embeds {
-    //     message.embeds = embeds;
-    // }
-}
-
-/// A single cached command invocation
-#[derive(Debug)]
-struct CachedInvocation {
-    /// User message that triggered this command invocation
-    user_msg: serenity::Message,
-    /// Associated bot response of this command invocation
-    bot_response: Option<serenity::Message>,
-    /// Whether the bot response should be deleted when the user deletes their message
-    track_deletion: bool,
-}
-
 /// Stores messages and the associated bot responses in order to implement poise's edit tracking
 /// feature.
 #[derive(Debug)]
@@ -75,11 +20,11 @@ impl EditTracker {
     /// Note: [`EditTracker`] will only purge messages outside the duration when [`Self::purge`]
     /// is called. If you supply the created [`EditTracker`] to [`crate::Framework`], the framework
     /// will take care of that by calling [`Self::purge`] periodically.
-    pub fn for_timespan(duration: std::time::Duration) -> std::sync::RwLock<Self> {
-        std::sync::RwLock::new(Self {
+    pub fn for_timespan(duration: std::time::Duration) -> std::sync::Arc<std::sync::RwLock<Self>> {
+        std::sync::Arc::new(std::sync::RwLock::new(Self {
             max_duration: duration,
             cache: Vec::new(),
-        })
+        }))
     }
 
     /// Returns a copy of a newly up-to-date cached message, or a brand new generated message when
@@ -110,15 +55,15 @@ impl EditTracker {
                     return None;
                 }
 
-                update_message(&mut invocation.user_msg, user_msg_update.clone());
-                Some((invocation.user_msg.clone(), true))
+                user_msg_update.apply_to_message(user_msg);
+                Some((user_msg.clone(), true))
             }
             None => {
                 if ignore_edits_if_not_yet_responded {
                     return None;
                 }
                 let mut user_msg = serenity::CustomMessage::new().build();
-                update_message(&mut user_msg, user_msg_update.clone());
+                user_msg_update.apply_to_message(&mut user_msg);
                 Some((user_msg, false))
             }
         }

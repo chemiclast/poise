@@ -7,7 +7,7 @@ use crate::serenity_prelude as serenity;
 /// _Takes_ the String out of the data. Logs warnings on unexpected state
 #[doc(hidden)]
 pub fn find_modal_text(
-    data: &mut serenity::ModalSubmitInteractionData,
+    data: &mut serenity::ModalInteractionData,
     custom_id: &str,
 ) -> Option<String> {
     for row in &mut data.components {
@@ -24,7 +24,10 @@ pub fn find_modal_text(
         };
 
         if text.custom_id == custom_id {
-            let value = std::mem::take(&mut text.value);
+            let Some(value) = std::mem::take(&mut text.value) else {
+                log::warn!("modal field is null");
+                return None;
+            };
             return if value.is_empty() { None } else { Some(value) };
         }
     }
@@ -60,16 +63,13 @@ pub async fn execute_modal<U: Send + Sync, E, M: Modal>(
 
     // Send modal
     interaction
-        .create_interaction_response(ctx.serenity_context, |b| {
-            *b = M::create(defaults, interaction_id.clone());
-            b
-        })
+        .create_response(ctx.discord, M::create(defaults, interaction_id.clone()))
         .await?;
     ctx.has_sent_initial_response
         .store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Wait for user to submit
-    let response = serenity::CollectModalInteraction::new(&ctx.serenity_context.shard)
+    let response = serenity::ModalInteractionCollector::new(&ctx.discord.shard)
         .filter(move |d| d.data.custom_id == interaction_id)
         .timeout(timeout.unwrap_or(std::time::Duration::from_secs(3600)))
         .await;
@@ -80,9 +80,10 @@ pub async fn execute_modal<U: Send + Sync, E, M: Modal>(
 
     // Send acknowledgement so that the pop-up is closed
     response
-        .create_interaction_response(ctx.serenity_context, |b| {
-            b.kind(serenity::InteractionResponseType::DeferredUpdateMessage)
-        })
+        .create_response(
+            ctx.discord,
+            serenity::CreateInteractionResponse::Acknowledge,
+        )
         .await?;
 
     Ok(Some(
@@ -130,18 +131,24 @@ pub trait Modal: Sized {
     ///
     /// Optionally takes an initialized instance as pre-filled values of this modal (see
     /// [`Self::execute_with_defaults()`] for more info)
-    fn create(
-        defaults: Option<Self>,
-        custom_id: String,
-    ) -> serenity::CreateInteractionResponse<'static>;
+    fn create(defaults: Option<Self>, custom_id: String) -> serenity::CreateInteractionResponse;
 
     /// Parses a received modal submit interaction into this type
     ///
     /// Returns an error if a field was missing. This should never happen, because Discord will only
     /// let users submit when all required fields are filled properly
-    fn parse(data: serenity::ModalSubmitInteractionData) -> Result<Self, &'static str>;
+    fn parse(data: serenity::ModalInteractionData) -> Result<Self, &'static str>;
 
-    /// Calls `execute_modal(ctx, None, None)`. See [`execute_modal`]
+    /// Convenience function for showing the modal and waiting for a response
+    ///
+    /// Note: a modal must be the first response to a command. You cannot send any messages before,
+    /// or the modal will fail
+    ///
+    /// This function:
+    /// 1. sends the modal via [`Self::create()`]
+    /// 2. waits for the user to submit via [`serenity::ModalInteractionCollector`]
+    /// 3. acknowledges the submitted data so that Discord closes the pop-up for the user
+    /// 4. parses the submitted data via [`Self::parse()`], wrapping errors in [`serenity::Error::Other`]
     // TODO: add execute_with_defaults? Or add a `defaults: Option<Self>` param?
     async fn execute<U: Send + Sync, E>(
         ctx: crate::ApplicationContext<'_, U, E>,

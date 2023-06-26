@@ -16,6 +16,22 @@ pub use paginate::*;
 
 use crate::serenity_prelude as serenity;
 
+/// Utility function to avoid verbose
+/// `ctx.send(crate::CreateReply::default().content(...).ephemeral(...))`
+async fn say_ephemeral<U, E>(
+    ctx: crate::Context<'_, U, E>,
+    msg: &str,
+    ephemeral: bool,
+) -> Result<(), serenity::Error> {
+    ctx.send(
+        crate::CreateReply::default()
+            .content(msg)
+            .ephemeral(ephemeral),
+    )
+    .await?;
+    Ok(())
+}
+
 /// An error handler that logs errors either via the [`log`] crate or via a Discord message. Set
 /// up a logger (e.g. `env_logger::init()`) to see the logged errors from this method.
 ///
@@ -38,9 +54,9 @@ pub async fn on_error<U, E: std::fmt::Display + std::fmt::Debug>(
         crate::FrameworkError::Setup { error, .. } => {
             eprintln!("Error in user data setup: {}", error);
         }
-        crate::FrameworkError::EventHandler { error, event, .. } => log::error!(
-            "User event event handler encountered an error on {} event: {}",
-            event.name(),
+        crate::FrameworkError::Listener { error, event, .. } => log::error!(
+            "User event listener encountered an error on {} event: {}",
+            event.snake_case_name(),
             error
         ),
         crate::FrameworkError::Command { ctx, error } => {
@@ -113,7 +129,7 @@ pub async fn on_error<U, E: std::fmt::Display + std::fmt::Debug>(
                 "You're too fast. Please wait {} seconds before retrying",
                 remaining_cooldown.as_secs()
             );
-            ctx.send(|b| b.content(msg).ephemeral(true)).await?;
+            say_ephemeral(ctx, &msg, true).await?;
         }
         crate::FrameworkError::MissingBotPermissions {
             missing_permissions,
@@ -123,7 +139,7 @@ pub async fn on_error<U, E: std::fmt::Display + std::fmt::Debug>(
                 "Command cannot be executed because the bot is lacking permissions: {}",
                 missing_permissions,
             );
-            ctx.send(|b| b.content(msg).ephemeral(true)).await?;
+            say_ephemeral(ctx, &msg, true).await?;
         }
         crate::FrameworkError::MissingUserPermissions {
             missing_permissions,
@@ -143,23 +159,23 @@ pub async fn on_error<U, E: std::fmt::Display + std::fmt::Debug>(
                     ctx.command().name,
                 )
             };
-            ctx.send(|b| b.content(response).ephemeral(true)).await?;
+            say_ephemeral(ctx, &response, true).await?;
         }
         crate::FrameworkError::NotAnOwner { ctx } => {
             let response = "Only bot owners can call this command";
-            ctx.send(|b| b.content(response).ephemeral(true)).await?;
+            say_ephemeral(ctx, response, true).await?;
         }
         crate::FrameworkError::GuildOnly { ctx } => {
             let response = "You cannot run this command in DMs.";
-            ctx.send(|b| b.content(response).ephemeral(true)).await?;
+            say_ephemeral(ctx, response, true).await?;
         }
         crate::FrameworkError::DmOnly { ctx } => {
             let response = "You cannot run this command outside DMs.";
-            ctx.send(|b| b.content(response).ephemeral(true)).await?;
+            say_ephemeral(ctx, response, true).await?;
         }
         crate::FrameworkError::NsfwOnly { ctx } => {
             let response = "You cannot run this command outside NSFW channels.";
-            ctx.send(|b| b.content(response).ephemeral(true)).await?;
+            say_ephemeral(ctx, response, true).await?;
         }
         crate::FrameworkError::DynamicPrefix { error, msg, .. } => {
             log::error!(
@@ -223,7 +239,16 @@ pub async fn autocomplete_command<'a, U, E>(
 pub async fn servers<U, E>(ctx: crate::Context<'_, U, E>) -> Result<(), serenity::Error> {
     use std::fmt::Write as _;
 
-    let show_private_guilds = ctx.framework().options().owners.contains(&ctx.author().id);
+    let mut show_private_guilds = false;
+    if let crate::Context::Application(_) = ctx {
+        if let Ok(app) = ctx.discord().http.get_current_application_info().await {
+            if let Some(owner) = &app.owner {
+                if owner.id == ctx.author().id {
+                    show_private_guilds = true;
+                }
+            }
+        }
+    }
 
     /// Stores details of a guild for the purposes of listing it in the bot guild list
     struct Guild {
@@ -240,7 +265,8 @@ pub async fn servers<U, E>(ctx: crate::Context<'_, U, E>) -> Result<(), serenity
     let mut guilds = guild_ids
         .iter()
         .map(|&guild_id| {
-            ctx.cache().guild_field(guild_id, |guild| Guild {
+            let guild = ctx.discord().cache.guild(guild_id)?;
+            Some(Guild {
                 name: guild.name.clone(),
                 num_members: guild.member_count,
                 is_public: guild.features.iter().any(|x| x == "DISCOVERABLE"),
@@ -289,8 +315,7 @@ pub async fn servers<U, E>(ctx: crate::Context<'_, U, E>) -> Result<(), serenity
         response += "\n_Showing private guilds because you are the bot owner_\n";
     }
 
-    ctx.send(|b| b.content(response).ephemeral(show_private_guilds))
-        .await?;
+    say_ephemeral(ctx, &response, show_private_guilds).await?;
 
     Ok(())
 }

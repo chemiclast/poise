@@ -48,17 +48,12 @@ pub fn generate_parameters(inv: &Invocation) -> Result<Vec<proc_macro2::TokenStr
                         .take(25)
                         // T or AutocompleteChoice<T> -> AutocompleteChoice<T>
                         .map(|value| poise::AutocompleteChoice::from(value))
-                        // AutocompleteChoice<T> -> serde_json::Value
-                        .map(|choice| poise::serenity_prelude::json::json!({
-                            "name": choice.name,
-                            "value": choice.value,
-                        }))
+                        // poise::AutocompleteChoice<T> -> serenity::AutocompleteChoice
+                        .map(|choice| choice.to_serenity())
                         .collect()
                         .await;
 
-                    let mut response = poise::serenity_prelude::CreateAutocompleteResponse::default();
-                    response.set_choices(poise::serenity_prelude::json::Value::Array(choices_json));
-                    Ok(response)
+                    Ok(poise::serenity_prelude::CreateAutocompleteResponse::default().set_choices(choices_json))
                 })) }
             }
             None => quote::quote! { None },
@@ -67,11 +62,11 @@ pub fn generate_parameters(inv: &Invocation) -> Result<Vec<proc_macro2::TokenStr
         // We can just cast to f64 here because Discord only uses f64 precision anyways
         // TODO: move this to poise::CommandParameter::{min, max} fields
         let min_value_setter = match &param.args.min {
-            Some(x) => quote::quote! { o.min_number_value(#x as f64); },
+            Some(x) => quote::quote! { .min_number_value(#x as f64) },
             None => quote::quote! {},
         };
         let max_value_setter = match &param.args.max {
-            Some(x) => quote::quote! { o.max_number_value(#x as f64); },
+            Some(x) => quote::quote! { .max_number_value(#x as f64) },
             None => quote::quote! {},
         };
         // TODO: move this to poise::CommandParameter::{min_length, max_length} fields
@@ -85,7 +80,7 @@ pub fn generate_parameters(inv: &Invocation) -> Result<Vec<proc_macro2::TokenStr
         };
         let type_setter = match inv.args.slash_command {
             true => quote::quote! { Some(|o| {
-                poise::create_slash_argument!(#type_, o);
+                poise::create_slash_argument!(#type_, o)
                 #min_value_setter #max_value_setter
                 #min_length_setter #max_length_setter
             }) },
@@ -171,21 +166,11 @@ pub fn generate_slash_action(inv: &Invocation) -> Result<proc_macro2::TokenStrea
             // why clippy doesn't turn off this lint inside macros in the first place
             #[allow(clippy::needless_question_mark)]
 
+            let cache_and_http = poise::Context::Application(ctx).cache_and_http();
             let ( #( #param_identifiers, )* ) = ::poise::parse_slash_args!(
-                ctx.serenity_context, ctx.interaction, ctx.args =>
+                &cache_and_http, ctx.interaction, ctx.args =>
                 #( (#param_names: #param_types), )*
-            ).await.map_err(|error| match error {
-                poise::SlashArgError::CommandStructureMismatch(description) => {
-                    poise::FrameworkError::CommandStructureMismatch { ctx, description }
-                },
-                poise::SlashArgError::Parse { error, input } => {
-                    poise::FrameworkError::ArgumentParse {
-                        ctx: ctx.into(),
-                        error,
-                        input: Some(input),
-                    }
-                },
-            })?;
+            ).await.map_err(|error| error.to_framework_error(ctx))?;
 
             if !ctx.framework.options.manual_cooldowns {
                 ctx.command.cooldowns.lock().unwrap().start_cooldown(ctx.into());

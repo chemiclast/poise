@@ -30,6 +30,8 @@ pub struct Command<U, E> {
     // ============= Command type agnostic data
     /// Subcommands of this command, if any
     pub subcommands: Vec<Command<U, E>>,
+    /// Require a subcommand to be invoked
+    pub subcommand_required: bool,
     /// Main name of the command. Aliases (prefix-only) can be set in [`Self::aliases`].
     pub name: String,
     /// Localized names with locale string as the key (slash-only)
@@ -48,7 +50,6 @@ pub struct Command<U, E> {
     /// Whether to hide this command in help menus.
     pub hide_in_help: bool,
     /// Short description of the command. Displayed inline in help menus and similar.
-    // TODO: rename to description
     pub description: Option<String>,
     /// Localized descriptions with locale string as the key (slash-only)
     pub description_localizations: std::collections::HashMap<String, String>,

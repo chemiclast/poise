@@ -16,7 +16,7 @@ async fn strip_prefix<'a, U, E>(
         author: &msg.author,
         serenity_context: ctx,
         framework,
-        data: framework.user_data().await,
+        data: framework.user_data,
     };
 
     if let Some(dynamic_prefix) = framework.options.prefix_options.dynamic_prefix {
@@ -66,7 +66,7 @@ async fn strip_prefix<'a, U, E>(
     }
 
     if let Some(dynamic_prefix) = framework.options.prefix_options.stripped_dynamic_prefix {
-        match dynamic_prefix(ctx, msg, framework.user_data().await).await {
+        match dynamic_prefix(ctx, msg, framework.user_data).await {
             Ok(result) => {
                 if let Some((prefix, content)) = result {
                     return Some((prefix, content));
@@ -203,7 +203,12 @@ pub async fn dispatch_message<'a, U: Send + Sync, E>(
     )
     .await?
     {
-        run_invocation(ctx).await?;
+        crate::catch_unwind_maybe(run_invocation(ctx))
+            .await
+            .map_err(|payload| crate::FrameworkError::CommandPanic {
+                payload,
+                ctx: ctx.into(),
+            })??;
     }
     Ok(())
 }
@@ -251,6 +256,7 @@ pub async fn parse_invocation<'a, U: Send + Sync, E>(
         invocation_data,
         trigger,
     })?;
+
     let action = match command.prefix_action {
         Some(x) => x,
         // This command doesn't have a prefix implementation
@@ -264,7 +270,7 @@ pub async fn parse_invocation<'a, U: Send + Sync, E>(
         invoked_command_name,
         args,
         framework,
-        data: framework.user_data().await,
+        data: framework.user_data,
         parent_commands,
         command,
         invocation_data,
@@ -287,6 +293,14 @@ pub async fn run_invocation<U, E>(
         && !ctx.framework.options.prefix_options.execute_untracked_edits
     {
         return Ok(());
+    }
+
+    if ctx.command.subcommand_required {
+        // None of this command's subcommands were invoked, or else we'd have the subcommand in
+        // ctx.command and not the parent command
+        return Err(crate::FrameworkError::SubcommandRequired {
+            ctx: crate::Context::Prefix(ctx),
+        });
     }
 
     super::common::check_permissions_and_cooldown(ctx.into()).await?;

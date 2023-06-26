@@ -6,6 +6,21 @@ use crate::{serenity_prelude as serenity, BoxFuture};
 /// enum and propagates it to a callback.
 ///
 /// Packaging every event into a singular type can make it easier to pass around and process.
+///
+/// ```rust
+/// use serenity::prelude::*;
+///
+/// let handler = poise::EventWrapper(|ctx, event| Box::pin(async move {
+///     println!("Received an event: {:?}", event);
+/// }));
+///
+/// # let token = "";
+/// # let intents = GatewayIntents::empty();
+/// Client::builder(token, intents)
+///     .event_handler(handler)
+///     // ...
+/// # ;
+/// ```
 pub struct EventWrapper<F>(pub F)
 where
     // gotta have this generic bound in the struct as well, or type inference will break down the line
@@ -43,7 +58,7 @@ macro_rules! event {
             )*
             // #[non_exhaustive] forbids struct update syntax for ?? reason
             #[doc(hidden)]
-            __NonExhaustive,
+            __NonExhaustive(std::convert::Infallible),
         }
 
         impl Event<'_> {
@@ -54,7 +69,7 @@ macro_rules! event {
                         $( #[$attr] )?
                         Self::$variant_name { .. } => stringify!($variant_name),
                     )*
-                    Self::__NonExhaustive => panic!(),
+                    Self::__NonExhaustive(unreachable) => match *unreachable {},
                 }
             }
 
@@ -67,7 +82,7 @@ macro_rules! event {
                             handler.$fn_name( ctx, $( $arg_name ),* ).await;
                         }
                     )*
-                    Self::__NonExhaustive => panic!(),
+                    Self::__NonExhaustive(unreachable) => match unreachable {},
                 }
             }
         }
@@ -78,6 +93,11 @@ macro_rules! event {
 // with help from vscode multiline editing and some manual cleanup
 event! {
     'a
+    application_command_permissions_update => ApplicationCommandPermissionsUpdate { permission: serenity::CommandPermission },
+    auto_moderation_action_execution => AutoModerationActionExecution { execution: serenity::ActionExecution },
+    auto_moderation_rule_create => AutoModerationRuleCreate{ rule: serenity::Rule },
+    auto_moderation_rule_update => AutoModerationRuleUpdate{ rule: serenity::Rule },
+    auto_moderation_rule_delete => AutoModerationRuleDelete{ rule: serenity::Rule },
     #[cfg(feature = "cache")]
     cache_ready => CacheReady { guilds: Vec<serenity::GuildId> },
     channel_create<'a> => ChannelCreate { channel: &'a serenity::GuildChannel },
@@ -120,6 +140,11 @@ event! {
     guild_role_update => GuildRoleUpdate { old_data_if_available: Option<serenity::Role>, new: serenity::Role },
     #[cfg(not(feature = "cache"))]
     guild_role_update => GuildRoleUpdate { new: serenity::Role },
+    guild_scheduled_event_create => GuildScheduledEventCreate { event: serenity::ScheduledEvent },
+    guild_scheduled_event_update => GuildScheduledEventUpdate { event: serenity::ScheduledEvent },
+    guild_scheduled_event_delete => GuildScheduledEventDelete { event: serenity::ScheduledEvent },
+    guild_scheduled_event_user_add => GuildScheduledEventUserAdd { subscribed: serenity::GuildScheduledEventUserAddEvent },
+    guild_scheduled_event_user_remove => GuildScheduledEventUserRemove { unsubscribed: serenity::GuildScheduledEventUserRemoveEvent },
     guild_stickers_update => GuildStickersUpdate { guild_id: serenity::GuildId, current_state: std::collections::HashMap<serenity::StickerId, serenity::Sticker>},
     guild_unavailable => GuildUnavailable { guild_id: serenity::GuildId },
     #[cfg(feature = "cache")]
@@ -129,6 +154,7 @@ event! {
     integration_create => IntegrationCreate { integration: serenity::Integration },
     integration_update => IntegrationUpdate { integration: serenity::Integration },
     integration_delete => IntegrationDelete { integration_id: serenity::IntegrationId, guild_id: serenity::GuildId, application_id: Option<serenity::ApplicationId> },
+    interaction_create => InteractionCreate { interaction: serenity::Interaction },
     invite_create => InviteCreate { data: serenity::InviteCreateEvent },
     invite_delete => InviteDelete { data: serenity::InviteDeleteEvent },
     message => Message { new_message: serenity::Message },
@@ -167,5 +193,4 @@ event! {
     #[cfg(not(feature = "cache"))]
     voice_state_update => VoiceStateUpdate { new: serenity::VoiceState },
     webhook_update => WebhookUpdate { guild_id: serenity::GuildId, belongs_to_channel_id: serenity::ChannelId },
-    interaction_create => InteractionCreate { interaction: serenity::Interaction },
 }

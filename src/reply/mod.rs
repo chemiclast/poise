@@ -11,7 +11,7 @@ use std::borrow::Cow;
 
 /// Private enum so we can extend, split apart, or merge variants without breaking changes
 #[derive(Clone)]
-pub(super) enum ReplyHandleInner<'a> {
+enum ReplyHandleInner<'a> {
     /// A reply sent to a prefix command, i.e. a normal standalone message
     Prefix(Box<serenity::Message>),
     /// An application command response
@@ -36,7 +36,7 @@ pub(super) enum ReplyHandleInner<'a> {
 /// Discord sometimes returns the [`serenity::Message`] object directly, but sometimes you have to
 /// request it manually. This enum abstracts over the two cases
 #[derive(Clone)]
-pub struct ReplyHandle<'a>(pub(super) ReplyHandleInner<'a>);
+pub struct ReplyHandle<'a>(ReplyHandleInner<'a>);
 
 impl ReplyHandle<'_> {
     /// Retrieve the message object of the sent reply.
@@ -100,21 +100,12 @@ impl ReplyHandle<'_> {
         ctx: crate::Context<'_, U, E>,
         builder: impl for<'a> FnOnce(&'a mut CreateReply<'att>) -> &'a mut CreateReply<'att>,
     ) -> Result<(), serenity::Error> {
-        // TODO: deduplicate this block of code
-        let mut reply = crate::CreateReply {
-            ephemeral: ctx.command().ephemeral,
-            allowed_mentions: ctx.framework().options().allowed_mentions.clone(),
-            ..Default::default()
-        };
-        builder(&mut reply);
-        if let Some(callback) = ctx.framework().options().reply_callback {
-            callback(ctx, &mut reply);
-        }
+        let reply = ctx.reply_builder(builder);
 
         match &self.0 {
             ReplyHandleInner::Prefix(msg) => {
                 msg.clone()
-                    .edit(ctx.sc(), |b| {
+                    .edit(ctx.serenity_context(), |b| {
                         // Clear builder so that adding embeds or attachments won't add on top of
                         // the pre-edit items but replace them (which is apparently the more
                         // intuitive behavior). Notably, setting the builder to default doesn't
@@ -159,7 +150,7 @@ impl ReplyHandle<'_> {
     /// Deletes this message
     pub async fn delete<U, E>(&self, ctx: crate::Context<'_, U, E>) -> Result<(), serenity::Error> {
         match &self.0 {
-            ReplyHandleInner::Prefix(msg) => msg.delete(ctx.sc()).await?,
+            ReplyHandleInner::Prefix(msg) => msg.delete(ctx.serenity_context()).await?,
             ReplyHandleInner::Application {
                 http: _,
                 interaction,

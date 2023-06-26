@@ -1,19 +1,19 @@
 [package]
-authors = ["kangalioo <jannik.a.schaper@web.de>"]
+authors = ["kangalio <jannik.a.schaper@web.de>"]
 edition = "2018"
 name = "poise"
-version = "0.5.2"
+version = "0.5.5"
 rust-version = "1.60.0"
 description = "A Discord bot framework for serenity"
 license = "MIT"
-repository = "https://github.com/kangalioo/poise/"
+repository = "https://github.com/serenity-rs/poise/"
 
 [dependencies]
 tokio = { version = "1.21.1", default-features = false } # for async in general
 futures-core = { version = "0.3.13", default-features = false } # for async in general
 futures-util = { version = "0.3.13", default-features = false } # for async in general
 once_cell = { version = "1.7.2", default-features = false, features = ["std"] } # to store and set user data
-poise_macros = { path = "macros", version = "0.5.2" } # remember to update the version on changes!
+poise_macros = { path = "macros", version = "0.5.5" } # remember to update the version on changes!
 async-trait = { version = "0.1.48", default-features = false } # various traits
 regex = { version = "1.6.0", default-features = false, features = ["std"] } # prefix
 log = { version = "0.4.14", default-features = false } # warning about weird state
@@ -23,19 +23,8 @@ parking_lot = "0.12.1"
 [dependencies.serenity]
 default-features = false
 features = ["builder", "client", "gateway", "model", "utils", "collector", "unstable_discord_api"]
-
-# version = "0.11.5"
-
 git = "https://github.com/serenity-rs/serenity"
 rev = "56867af31c5144029cf31dc1d563c99a47b38aac"
-
-# git = "https://github.com/serenity-rs/serenity"
-# rev = "2bb9a01bfccd0485ccb7e9f20cce8edff7426eb3"
-
-# git = "https://github.com/kangalioo/serenity"
-# branch = "poise-tailored"
-
-# path = "../_downloaded/serenity"
 
 [dev-dependencies]
 # For the examples
@@ -47,11 +36,16 @@ intl-memoizer = "0.5.1"
 fluent-syntax = "0.11"
 
 [features]
-default = ["serenity/rustls_backend", "cache", "chrono"]
+default = ["serenity/rustls_backend", "cache", "chrono", "handle_panics"]
 chrono = ["serenity/chrono"]
 cache = ["serenity/cache"]
 # No-op feature because serenity/collector is now enabled by default
 collector = []
+# Enables support for handling panics inside commands via FrameworkError::CommandPanic.
+# This feature has no overhead and can always be enabled.
+# This feature exists because some users want to disable the mere possibility of catching panics at
+# build time for peace of mind.
+handle_panics = []
 
 [package.metadata.docs.rs]
 all-features = true

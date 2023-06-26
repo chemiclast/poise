@@ -27,7 +27,8 @@ features = ["builder", "client", "gateway", "model", "utils", "collector", "unst
 # version = "0.11.5"
 
 git = "https://github.com/serenity-rs/serenity"
-rev = "fc9c420a034b110e427a65f3b72cc1a55bc33d44"
+branch = "next"
+rev = "56867af31c5144029cf31dc1d563c99a47b38aac"
 
 # git = "https://github.com/serenity-rs/serenity"
 # rev = "2bb9a01bfccd0485ccb7e9f20cce8edff7426eb3"
